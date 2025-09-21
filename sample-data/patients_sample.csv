@@ -1,0 +1,5 @@
+name,gender,phone,appointment_date,appointment_time,doctor_name
+John Smith,male,+15555550100,2025-09-22,14:30,Dr. Ahmed
+Jane Doe,female,+15555550101,2025-09-22,15:00,Dr. Lee
+Alex Kim,other,+15555550102,2025-09-23,09:15,Dr. Patel
+

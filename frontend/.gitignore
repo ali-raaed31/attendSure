@@ -1,0 +1,29 @@
+# Node / Next.js
+.next
+node_modules
+out
+.turbo
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# dotenv environment variable files
+.env
+.env.*
+!.env.example
+
+# temp directory
+.temp
+.tmp
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
