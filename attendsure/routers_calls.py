@@ -35,8 +35,10 @@ def _normalize_e164(candidate: str) -> str:
 
 @router.post("/launch")
 async def launch_calls(payload: Dict[str, Any], session: Session = Depends(get_session)):
-    patient_ids: List[int] = payload.get("patientIds") or []
+    logger.info("Launch calls payload: %s", payload)
+    patient_ids: List[int] = payload.get("patientIds") or payload.get("patient_ids") or []
     schedule_at: Optional[str] = payload.get("scheduleAt")
+    logger.info("Extracted patient_ids: %s", patient_ids)
     if not patient_ids:
         raise HTTPException(status_code=400, detail="patientIds is required")
 
@@ -66,7 +68,9 @@ async def launch_calls(payload: Dict[str, Any], session: Session = Depends(get_s
         metadata = {"patientId": patient.id, "callId": call.id}
 
         # Schedule or immediate launch via launcher (throttled)
-        logger.info("Queue launch call -> patientId=%s callId=%s", patient_id, call.id)
+        logger.info("Queue launch call -> patientId=%s callId=%s phone=%s assistant=%s", 
+                   patient_id, call.id, _normalize_e164(patient.phone), settings.vapi_assistant_id)
+        logger.info("Variable values: %s", variable_values)
         asyncio.create_task(
             launcher.launch_call(
                 call_id=call.id,

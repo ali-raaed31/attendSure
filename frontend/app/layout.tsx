@@ -1,8 +1,9 @@
 import './globals.css'
 import React from 'react'
-import Link from 'next/link'
-import Image from 'next/image'
 import { ToastProvider } from './toast'
+import { Sidebar } from '@/components/sidebar'
+import { ThemeProvider } from '@/components/theme-provider'
+import { ThemeToggle } from '@/components/theme-toggle'
 
 export const metadata = {
   title: 'AttendSure',
@@ -11,26 +12,21 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body>
-        <header style={{ padding: '10px 16px', borderBottom: '1px solid #e5e7eb', position: 'sticky', top: 0, background: 'white', zIndex: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', maxWidth: 1200, margin: '0 auto' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Link href="/" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                <Image src="/attendsure-icon.svg" alt="AttendSure" width={26} height={26} />
-                <span style={{ fontWeight: 700 }}>AttendSure</span>
-              </Link>
+        <ThemeProvider>
+          <ToastProvider>
+            <Sidebar />
+            <div className="ml-64 min-h-screen">
+              <header className="sticky top-0 z-30 flex h-16 items-center justify-end border-b bg-background/60 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/50">
+                <ThemeToggle />
+              </header>
+              <main className="p-6">
+                {children}
+              </main>
             </div>
-            <nav style={{ display: 'flex', gap: 16 }}>
-              <Link href="/">Dashboard</Link>
-              <Link href="/contacts">Contacts</Link>
-              <Link href="/calls">Calls</Link>
-            </nav>
-          </div>
-        </header>
-        <ToastProvider>
-          <main style={{ padding: 16, maxWidth: 1000, margin: '0 auto' }}>{children}</main>
-        </ToastProvider>
+          </ToastProvider>
+        </ThemeProvider>
       </body>
     </html>
   )

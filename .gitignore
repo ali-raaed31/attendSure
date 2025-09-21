@@ -46,3 +46,6 @@ tmp/
 
 # Local dev test assets
 /test/
+
+
+/node_modules/

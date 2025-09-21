@@ -20,6 +20,10 @@ async def create_outbound_call(
     metadata: Optional[Dict[str, Any]] = None,
     phone_number_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    if not VAPI_KEY:
+        raise ValueError("VAPI_API_KEY not configured")
+    if not assistant_id:
+        raise ValueError("VAPI_ASSISTANT_ID not configured")
     body: Dict[str, Any] = {
         "assistantId": assistant_id,
         "type": "outboundPhoneCall",

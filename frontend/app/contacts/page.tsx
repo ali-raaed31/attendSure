@@ -1,11 +1,15 @@
 'use client'
-import Papa from 'papaparse'
 import React from 'react'
-import { apiGet, apiPost } from '../../lib/api'
+import Papa from 'papaparse'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Phone, FileUp, Plus } from 'lucide-react'
 import { useToast } from '../toast'
+import { apiGet, apiPost, apiPostForm, API_BASE } from '@/lib/api'
 
 type Patient = {
-  id?: number
+  id: number
   name: string
   gender?: string
   phone: string
@@ -15,212 +19,444 @@ type Patient = {
   doctor_name?: string
 }
 
+type CallDetail = {
+  call: { id: number; status: string; fail_reason?: string }
+  patient: Patient
+  result?: { summary?: string; structured_json?: string | null }
+}
+
 export default function ContactsPage() {
   const { push } = useToast()
+
   const [patients, setPatients] = React.useState<Patient[]>([])
   const [loading, setLoading] = React.useState(false)
-  const [form, setForm] = React.useState<Patient>({ name: '', phone: '' })
-  const [message, setMessage] = React.useState<string | null>(null)
-  const [confirmId, setConfirmId] = React.useState<number | null>(null)
-  const [sidebarCallId, setSidebarCallId] = React.useState<number | null>(null)
-  const [sidebarData, setSidebarData] = React.useState<any>(null)
+  const [uploadOpen, setUploadOpen] = React.useState(false)
+  const [file, setFile] = React.useState<File | null>(null)
 
-  const refresh = React.useCallback(async () => {
+  const [addOpen, setAddOpen] = React.useState(false)
+  const [addForm, setAddForm] = React.useState({
+    name: '',
+    phone: '',
+    gender: 'other',
+    dob: '',
+    appointment_date: '',
+    appointment_time: '',
+    doctor_name: '',
+  })
+
+  const [callOpen, setCallOpen] = React.useState(false)
+  const [activePatient, setActivePatient] = React.useState<Patient | null>(null)
+  const [callId, setCallId] = React.useState<number | null>(null)
+  const [callDetail, setCallDetail] = React.useState<CallDetail | null>(null)
+
+  const [summaryOpen, setSummaryOpen] = React.useState(false)
+  const [summaryDetail, setSummaryDetail] = React.useState<CallDetail | null>(null)
+
+  const loadPatients = React.useCallback(async () => {
     setLoading(true)
     try {
       const data = await apiGet<Patient[]>('/api/contacts')
+      console.log('Loaded patients from contacts:', data)
+      setPatients(data)
+    } catch {
+      try {
+        const data = await apiGet<Patient[]>('/api/patients')
+        console.log('Loaded patients from patients:', data)
       setPatients(data)
     } catch (e: any) {
-      setMessage(e.message)
+        setPatients([])
+        push({ message: e?.message || 'Failed to load patients', type: 'error' })
+      }
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [push])
 
-  React.useEffect(() => { void refresh() }, [refresh])
+  React.useEffect(() => { void loadPatients() }, [loadPatients])
 
-  function onCSVChange(file: File | null) {
+  async function handleImport() {
     if (!file) return
+    try {
+      // Try JSON upload first (fast path)
+      const rows: any[] = await new Promise((resolve, reject) => {
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
-      complete: async (result) => {
-        try {
-          const rows = result.data as any[]
-          const res = await apiPost<{ inserted: number; errors: any[] }>('/api/contacts/upload-json', rows)
-          setMessage(`Inserted ${res.inserted}, errors ${res.errors.length}`)
-          push({ message: `Uploaded CSV: ${res.inserted} inserted, ${res.errors.length} errors`, type: res.errors.length ? 'error' : 'success' })
-          void refresh()
-        } catch (e: any) {
-          setMessage(e.message)
-          push({ message: e.message, type: 'error' })
-        }
+          complete: (res) => resolve(res.data as any[]),
+          error: (err) => reject(err),
+        })
+      })
+      try {
+        await apiPost('/api/contacts/upload-json', rows)
+      } catch {
+        const fd = new FormData()
+        fd.append('file', file)
+        // Prefer contacts/upload, fallback to patients/upload
+        try { await apiPostForm('/api/contacts/upload', fd) } catch { await apiPostForm('/api/patients/upload', fd) }
       }
-    })
-  }
-
-  async function onCreate(e: React.FormEvent) {
-    e.preventDefault()
-    try {
-      const res = await apiPost<{ id: number }>('/api/contacts', form)
-      setMessage(`Created ${res.id}`)
-      push({ message: `Created contact #${res.id}`, type: 'success' })
-      setForm({ name: '', phone: '' })
-      void refresh()
+      setUploadOpen(false)
+      setFile(null)
+      push({ message: 'Import completed', type: 'success' })
+      void loadPatients()
     } catch (e: any) {
-      setMessage(e.message)
-      push({ message: e.message, type: 'error' })
+      push({ message: e?.message || 'Failed to import', type: 'error' })
     }
   }
 
-  async function confirmCall(patientId: number) {
-    setConfirmId(patientId)
+  function openCall(patient: Patient) {
+    console.log('Opening call modal for patient:', patient)
+    setActivePatient(patient)
+    setCallDetail(null)
+    setCallId(null)
+    setCallOpen(true)
   }
 
-  async function launchCallNow(patientId: number) {
-    setConfirmId(null)
+  async function launchCall() {
+    if (!activePatient) return
     try {
-      const res = await apiPost<{ callIds: number[] }>("/api/calls/launch", { patientIds: [patientId] })
-      const callId = res.callIds?.[0]
-      setSidebarCallId(callId)
-      push({ message: `Launched call #${callId}`, type: 'success' })
+      const variableValues = {
+        // legacy keys for backward compatibility
+        name: activePatient.name,
+        gender: activePatient.gender,
+        appointment_date: activePatient.appointment_date,
+        appointment_time: activePatient.appointment_time,
+        doctor_name: activePatient.doctor_name,
+        // requested keys
+        app_date: activePatient.appointment_date,
+        app_time: activePatient.appointment_time,
+        full_name: activePatient.name,
+        dob: activePatient.dob,
+        doctor: activePatient.doctor_name,
+      }
+      console.log('Launching call for patient:', activePatient)
+      
+      // Ensure we have a valid patient ID
+      if (!activePatient.id) {
+        throw new Error('Patient ID is missing')
+      }
+      
+      const payload = {
+        patientIds: [activePatient.id],
+        patient_ids: [activePatient.id], // Add fallback key
+      }
+      console.log('Call launch payload:', payload)
+      console.log('API endpoint:', `${API_BASE}/api/calls/launch`)
+      
+      const res = await apiPost<{ callIds: number[] }>(
+        '/api/calls/launch',
+        payload
+      )
+      console.log('Launch response:', res)
+      const id = res.callIds?.[0]
+      if (!id) {
+        throw new Error('Launch responded without call id')
+      }
+      setCallId(id)
+      push({ message: `Call #${id} launched`, type: 'success' })
+      pollStatus(id)
     } catch (e: any) {
-      setMessage(e.message)
-      push({ message: e.message, type: 'error' })
+      push({ message: e?.message || 'Failed to launch call', type: 'error' })
     }
   }
 
-  React.useEffect(() => {
-    let t: any
-    if (sidebarCallId) {
-      const poll = async () => {
-        try {
-          const data = await apiGet(`/api/calls/${sidebarCallId}`)
-          setSidebarData(data)
-          if (data?.call?.status === 'completed' || data?.call?.status === 'failed') return
-          t = setTimeout(poll, 5000)
+  function pollStatus(id: number) {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const detail = await apiGet<CallDetail>(`/api/calls/${id}`)
+        if (cancelled) return
+        setCallDetail(detail)
+        const status = detail?.call?.status
+        if (status === 'completed' || status === 'failed') return
+        setTimeout(tick, 3000)
         } catch {
-          t = setTimeout(poll, 5000)
-        }
+        if (!cancelled) setTimeout(tick, 3000)
       }
-      void poll()
     }
-    return () => t && clearTimeout(t)
-  }, [sidebarCallId])
+    setTimeout(tick, 1000)
+    return () => { cancelled = true }
+  }
+
+  function openSummary(detail: CallDetail) {
+    setSummaryDetail(detail)
+    setSummaryOpen(true)
+  }
+
+  async function handleAddPatient() {
+    try {
+      const payload = {
+        ...addForm,
+        gender: addForm.gender || 'other',
+        dob: addForm.dob || null,
+        appointment_date: addForm.appointment_date || null,
+        appointment_time: addForm.appointment_time || null,
+        doctor_name: addForm.doctor_name || null,
+      }
+      console.log('Add patient payload:', payload)
+      
+      let res: { id: number }
+      try {
+        res = await apiPost<{ id: number }>('/api/contacts', payload)
+      } catch (contactsError) {
+        console.log('Contacts endpoint failed, trying patients:', contactsError)
+        // Fallback to /api/patients endpoint
+        res = await apiPost<{ id: number }>('/api/patients', payload)
+      }
+      
+      push({ message: `Patient #${res.id} created`, type: 'success' })
+      setAddOpen(false)
+      setAddForm({
+        name: '',
+        phone: '',
+        gender: 'other',
+        dob: '',
+        appointment_date: '',
+        appointment_time: '',
+        doctor_name: '',
+      })
+      void loadPatients()
+    } catch (e: any) {
+      console.error('Add patient error:', e)
+      push({ message: e?.message || 'Failed to add patient', type: 'error' })
+    }
+  }
 
   return (
-    <div className="grid" style={{ gap: 24 }}>
-      <div className="card">
-        <h2>Upload CSV</h2>
-        <input type="file" accept=".csv" onChange={(e) => onCSVChange(e.target.files?.[0] || null)} />
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Appointments</h1>
+        <div className="flex gap-2">
+          <Button onClick={() => setAddOpen(true)} className="inline-flex items-center gap-2">
+            <Plus className="h-4 w-4" /> Add Patient
+          </Button>
+          <Button onClick={() => setUploadOpen(true)} className="inline-flex items-center gap-2">
+            <FileUp className="h-4 w-4" /> Import CSV
+          </Button>
+        </div>
       </div>
-      <div className="card">
-        <h2>Add Contact</h2>
-        <form onSubmit={onCreate} className="grid grid-2">
-          <div>
-            <label>Name</label>
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-          </div>
-          <div>
-            <label>Phone</label>
-            <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required />
-          </div>
-          <div>
-            <label>DOB</label>
-            <input type="date" value={form.dob || ''} onChange={(e) => setForm({ ...form, dob: e.target.value })} />
-          </div>
-          <div>
-            <label>Gender</label>
-            <select value={form.gender || ''} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
-              <option value="">-</option>
-              <option value="male">male</option>
-              <option value="female">female</option>
-              <option value="other">other</option>
-            </select>
-          </div>
-          <div>
-            <label>Doctor Name</label>
-            <input value={form.doctor_name || ''} onChange={(e) => setForm({ ...form, doctor_name: e.target.value })} />
-          </div>
-          <div>
-            <label>Appt Date</label>
-            <input type="date" value={form.appointment_date || ''} onChange={(e) => setForm({ ...form, appointment_date: e.target.value })} />
-          </div>
-          <div>
-            <label>Appt Time</label>
-            <input type="time" value={form.appointment_time || ''} onChange={(e) => setForm({ ...form, appointment_time: e.target.value })} />
-          </div>
-          <div style={{ gridColumn: '1 / span 2' }}>
-            <button type="submit">Create</button>
-          </div>
-        </form>
-      </div>
-      <div className="card" style={{ position: 'relative', overflow: 'hidden' }}>
-        <h2>Patients {loading ? <span className="muted">(loading...)</span> : null}</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
-          <div>
-            {patients.map(p => (
-              <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px', gap: 8, alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #eef2f7' }}>
-                <div>
-                  <div style={{ fontWeight: 600 }}>{p.name}</div>
-                  <div className="muted" style={{ fontSize: 12 }}>{p.phone} · {(p.appointment_date || '-') + ' ' + (p.appointment_time || '')} · {p.doctor_name || '-'}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <button onClick={() => confirmCall(p.id!)}>Call</button>
-                </div>
-              </div>
-            ))}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Patients {loading ? <span className="text-sm font-normal text-muted-foreground">(loading...)</span> : null}</CardTitle>
+          <CardDescription>Manage patients and launch confirmation calls</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Phone</TableHead>
+                <TableHead>Doctor</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Time</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {patients.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell className="font-medium">{p.name}</TableCell>
+                  <TableCell className="text-muted-foreground">{p.phone}</TableCell>
+                  <TableCell className="text-muted-foreground">{p.doctor_name || '-'}</TableCell>
+                  <TableCell className="text-muted-foreground">{p.appointment_date || '-'}</TableCell>
+                  <TableCell className="text-muted-foreground">{p.appointment_time || '-'}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <Button size="sm" onClick={() => openCall(p)} className="inline-flex items-center gap-1">
+                        <Phone className="h-4 w-4" /> Call
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+            {patients.length === 0 ? (
+              <TableCaption>No patients found. Import a CSV to get started.</TableCaption>
+            ) : null}
+          </Table>
+        </CardContent>
+      </Card>
+
+      {uploadOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg">
+            <h3 className="mb-2 text-lg font-semibold">Import Patients CSV</h3>
+            <p className="mb-4 text-sm text-muted-foreground">Choose a CSV with headers: name, gender, phone, dob, appointment_date, appointment_time, doctor_name</p>
+            <input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] || null)} className="mb-4 w-full rounded-md border bg-background px-3 py-2 text-sm" />
+            <div className="flex justify-end gap-3">
+              <Button variant="ghost" onClick={() => { setUploadOpen(false); setFile(null) }}>Cancel</Button>
+              <Button onClick={handleImport} disabled={!file} className="inline-flex items-center gap-2"><FileUp className="h-4 w-4" /> Import</Button>
+            </div>
           </div>
         </div>
+      ) : null}
 
-        {confirmId !== null ? (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div className="card" style={{ width: 420 }}>
-              <h3>Launch call?</h3>
-              <p>This will immediately place a call using Vapi. Proceed?</p>
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <button onClick={() => setConfirmId(null)} style={{ background: '#6b7280' }}>Cancel</button>
-                <button onClick={() => launchCallNow(confirmId!)}>Launch</button>
-              </div>
-            </div>
+      {callOpen && activePatient ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-xl rounded-lg border bg-background p-6 shadow-lg">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Call Patient</h3>
+              <Button variant="ghost" onClick={() => { setCallOpen(false); setActivePatient(null); setCallDetail(null); setCallId(null) }}>Close</Button>
           </div>
-        ) : null}
-
-        {sidebarCallId ? (
-          <div style={{ position: 'fixed', top: 56, right: 0, height: 'calc(100vh - 56px)', width: 420, background: 'white', borderLeft: '1px solid #e5e7eb', padding: 16, boxShadow: '-8px 0 24px rgba(0,0,0,0.05)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0 }}>Call #{sidebarCallId}</h3>
-              <button onClick={() => { setSidebarCallId(null); setSidebarData(null); }} style={{ background: '#6b7280' }}>Close</button>
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <div className="muted">Status</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
-                {(!sidebarData || sidebarData?.call?.status === 'in_progress') ? (
-                  <span role="img" aria-label="loading" className="spinner" />
-                ) : sidebarData?.call?.status === 'completed' ? (
-                  <span style={{ color: '#16a34a' }}>✓</span>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+          <div>
+                <div className="text-muted-foreground">Name</div>
+                <div className="font-medium">{activePatient.name}</div>
+          </div>
+          <div>
+                <div className="text-muted-foreground">Phone</div>
+                <div className="font-medium">{activePatient.phone}</div>
+          </div>
+          <div>
+                <div className="text-muted-foreground">DOB</div>
+                <div className="font-medium">{activePatient.dob || 'Not provided'}</div>
+          </div>
+          <div>
+                <div className="text-muted-foreground">Doctor</div>
+                <div className="font-medium">{activePatient.doctor_name || '-'}</div>
+          </div>
+          <div>
+                <div className="text-muted-foreground">Appointment</div>
+                <div className="font-medium">{activePatient.appointment_date || '-'} {activePatient.appointment_time || ''}</div>
+          </div>
+          </div>
+            <div className="mt-4 flex items-center justify-between">
+              <div className="text-sm">
+                <div className="text-muted-foreground">Status</div>
+                <div className="font-medium">
+                  {callDetail?.call?.status || (callId ? 'in_progress' : 'idle')}
+                </div>
+                {callDetail?.call?.fail_reason ? (
+                  <div className="text-sm text-red-600">{callDetail.call.fail_reason}</div>
                 ) : null}
-                <span>{sidebarData?.call?.status || 'in_progress'}</span>
+                </div>
+              <div className="flex gap-3">
+                <Button onClick={launchCall} disabled={!!callId} className="inline-flex items-center gap-2"><Phone className="h-4 w-4" /> {callId ? 'Calling...' : 'Start Call'}</Button>
+                {callDetail ? (
+                  <Button variant="secondary" onClick={() => openSummary(callDetail)}>Summary</Button>
+                ) : null}
               </div>
             </div>
-            {sidebarData?.call?.fail_reason ? (
-              <div style={{ marginTop: 12 }}>
-                <div className="muted">Failure Reason</div>
-                <div style={{ color: '#b91c1c' }}>{sidebarData.call.fail_reason}</div>
-              </div>
-            ) : null}
-            <div style={{ marginTop: 12 }}>
-              <div className="muted">Summary</div>
-              <div>{sidebarData?.result?.summary || '-'}</div>
+          </div>
+        </div>
+      ) : null}
+
+      {summaryOpen && summaryDetail ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-2xl rounded-lg border bg-background p-6 shadow-lg">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Call Summary</h3>
+              <Button variant="ghost" onClick={() => { setSummaryOpen(false); setSummaryDetail(null) }}>Close</Button>
             </div>
-            <div style={{ marginTop: 12 }}>
-              <div className="muted">Structured</div>
-              <pre style={{ background: '#f8fafc', padding: 12, borderRadius: 8, maxHeight: 240, overflow: 'auto' }}>{sidebarData?.result?.structured_json ? JSON.stringify(JSON.parse(sidebarData.result.structured_json), null, 2) : '-'}</pre>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <div className="text-muted-foreground">Patient</div>
+                <div className="font-medium">{summaryDetail.patient?.name}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Status</div>
+                <div className="font-medium">{summaryDetail.call?.status}</div>
+              </div>
+            </div>
+            <div className="mt-4">
+              <div className="text-sm text-muted-foreground">Summary</div>
+              <div className="text-sm">{summaryDetail.result?.summary || '-'}</div>
+            </div>
+            <div className="mt-4">
+              <div className="text-sm text-muted-foreground">Structured</div>
+              <pre className="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs">{
+                summaryDetail.result?.structured_json ? JSON.stringify(
+                  (() => { try { return JSON.parse(summaryDetail.result!.structured_json as string) } catch { return summaryDetail.result!.structured_json } })(),
+                  null,
+                  2
+                ) : '-'
+              }</pre>
+              </div>
             </div>
           </div>
         ) : null}
-      </div>
-      {message ? <div className="card" style={{ background: '#f0fdf4', borderColor: '#86efac' }}>{message}</div> : null}
+
+      {addOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-xl rounded-lg border bg-background p-6 shadow-lg">
+            <h3 className="mb-4 text-lg font-semibold">Add Patient</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="mb-1 block text-sm font-medium">Name *</label>
+                <input
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={addForm.name}
+                  onChange={(e) => setAddForm({ ...addForm, name: e.target.value })}
+                  required
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">Phone *</label>
+                <input
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={addForm.phone}
+                  onChange={(e) => setAddForm({ ...addForm, phone: e.target.value })}
+                  placeholder="+1234567890"
+                  required
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">Gender</label>
+                <select
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={addForm.gender}
+                  onChange={(e) => setAddForm({ ...addForm, gender: e.target.value })}
+                >
+                  <option value="male">Male</option>
+                  <option value="female">Female</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">Date of Birth</label>
+                <input
+                  type="date"
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={addForm.dob}
+                  onChange={(e) => setAddForm({ ...addForm, dob: e.target.value })}
+                />
+            </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">Doctor</label>
+                <input
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={addForm.doctor_name}
+                  onChange={(e) => setAddForm({ ...addForm, doctor_name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">Appointment Date</label>
+                <input
+                  type="date"
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={addForm.appointment_date}
+                  onChange={(e) => setAddForm({ ...addForm, appointment_date: e.target.value })}
+                />
+            </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">Appointment Time</label>
+                <input
+                  type="time"
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={addForm.appointment_time}
+                  onChange={(e) => setAddForm({ ...addForm, appointment_time: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-3">
+              <Button variant="ghost" onClick={() => { setAddOpen(false) }}>Cancel</Button>
+              <Button onClick={handleAddPatient} disabled={!addForm.name || !addForm.phone}>
+                Add Patient
+              </Button>
+            </div>
+            </div>
+          </div>
+        ) : null}
     </div>
   )
 }
